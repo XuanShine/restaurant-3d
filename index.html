@@ -1,0 +1,152 @@
+<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8"><title>Restaurant 3D – échelle 1:1</title>
+<style>body{margin:0;overflow:hidden;font-family:sans-serif}#ui{position:absolute;top:10px;left:10px;display:flex;gap:6px;flex-wrap:wrap}
+button{padding:7px 11px;border:0;border-radius:6px;background:#1f3d2f;color:#fff;cursor:pointer}#info{position:absolute;bottom:8px;left:10px;color:#333;font-size:12px;background:#fffc;padding:4px 8px;border-radius:4px}</style>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}</script></head><body>
+<div id="ui"><button id="top">Vue dessus</button><button id="persp">Perspective</button><button id="walls">Murs</button><button id="ceil">Plafond</button><button id="grid">Grille 1 m</button></div>
+<div id="info">1 unité = 1 m · origine = angle intérieur haut-gauche de la salle · x → façade, z → fond</div>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+
+// ================= LAYOUT (mètres, x = largeur 0→6.61, z = profondeur 0→9.90, rot en degrés) =================
+const C={green:'#1f4d38',purple:'#4a1f4a',mustard:'#c9a227',marble:'#eeeae2',greenMarble:'#24503c',wall:'#8c877f',tile:'#e6dccb',wood:'#8a5a32',grey:'#bdbdbd'};
+const LAYOUT={
+ room:{width:6.61,depth:9.90,height:3.70,wallT:0.20},
+ // murs: segments [x1,z1,x2,z2], h, épaisseur
+ walls:[
+  {x1:-0.1,z1:-0.1,x2:6.71,z2:-0.1},           // mur haut
+  {x1:-0.2,z1:9.97,x2:6.71,z2:9.97},           // mur bas
+  {x1:-0.1,z1:-0.1,x2:-0.1,z2:2.0},            // gauche (côté WC)
+  {x1:-0.1,z1:3.4,x2:-0.1,z2:3.75},
+  {x1:-0.1,z1:6.3,x2:-0.1,z2:7.6},
+  {x1:-0.2,z1:7.6,x2:-0.2,z2:9.97},
+  {x1:-1.35,z1:1.95,x2:-0.1,z2:1.95,t:0.1},    // cloison WC
+  {x1:-1.35,z1:3.42,x2:-0.1,z2:3.42,t:0.1},
+  {x1:-1.35,z1:7.55,x2:-0.2,z2:7.55,t:0.1},
+ ],
+ // façade droite: pleins + baies vitrées (z1→z2), hauteur ouverture
+ facade:{x:6.74,t:0.26,parts:[
+  {type:'wall',z1:-0.1,z2:0.57},{type:'door',z1:0.57,z2:2.77,h:2.80},
+  {type:'wall',z1:2.77,z2:3.83},{type:'baie',z1:3.83,z2:6.50,h:2.64,sill:0.35},
+  {type:'wall',z1:6.50,z2:6.76},{type:'door',z1:6.76,z2:7.69,h:2.39,sill:0.6},
+  {type:'baie',z1:7.69,z2:8.94,h:2.39,sill:0.6},{type:'wall',z1:8.94,z2:9.97}]},
+ floors:[
+  {type:'tiles',x:3.305,z:4.95,w:6.61,d:9.9},
+  {type:'checker',x:-0.72,z:5.48,w:1.2,d:4.1},
+  {type:'wcfloor',x:-0.72,z:0.92,w:1.2,d:2.0,color:'#d8c7a0'},
+  {type:'barfloor',x:5.60,z:4.70,w:2.00,d:3.99,color:'#c7d8c8'},
+ ],
+ frieze:[ // bandes mosaïque [x,z,w,d]
+  {x:2.35,z:1.25,w:3.8,d:0.18},{x:0.45,z:4.2,w:0.18,d:6.0},{x:4.25,z:2.1,w:0.18,d:1.7},
+  {x:1.3,z:7.2,w:1.9,d:0.18},{x:2.2,z:9.25,w:3.4,d:0.18},{x:4.25,z:8.25,w:0.18,d:2.0},{x:5.4,z:7.25,w:2.3,d:0.18}],
+ items:[
+  // banquettes (longueur w, profondeur d)
+  {type:'banquette',x:1.70,z:0.30,w:3.25,d:0.55,rot:0,color:C.green,accent:C.purple,cushions:2},
+  {type:'banquette',x:4.15,z:0.30,w:1.65,d:0.55,rot:0,color:C.green,cushions:2},
+  {type:'banquette',x:0.22,z:8.40,w:2.6,d:0.50,rot:90,color:C.purple,cushions:2},
+  {type:'banquette',x:2.40,z:9.62,w:4.4,d:0.50,rot:180,color:C.purple,accent:C.green,cushions:3},
+  {type:'sofaU',x:5.65,z:8.55,w:1.85,d:1.65,color:C.green,side:C.mustard},
+  // tables carrées 70 cm
+  ...[0.56,1.31,2.07,2.77,3.78,4.48].map((x,i)=>({type:'table',shape:'square',x,z:0.97,size:0.70,chairs:[{s:'S',c:[C.green,C.green,C.purple,C.purple,C.purple,C.green][i]}]})),
+  {type:'table',shape:'square',x:2.78,z:2.80,size:0.70,chairs:[{s:'W',c:C.purple},{s:'E',c:C.purple}]},
+  {type:'table',shape:'square',x:2.78,z:3.72,size:0.70,chairs:[{s:'W',c:C.purple},{s:'E',c:C.green}]},
+  {type:'table',shape:'square',x:1.16,z:4.39,size:0.70,chairs:[{s:'N',c:C.green},{s:'S',c:C.green}]},
+  {type:'table',shape:'square',x:1.33,z:6.09,size:0.70,chairs:[{s:'N',c:C.green},{s:'S',c:C.green}]},
+  {type:'table',shape:'square',x:2.53,z:6.92,size:0.70,chairs:[{s:'N',c:C.purple},{s:'S',c:C.purple}]},
+  {type:'table',shape:'square',x:3.24,z:6.92,size:0.70,chairs:[{s:'N',c:C.purple},{s:'S',c:C.purple}]},
+  ...[7.66,8.34,9.31].map(z=>({type:'table',shape:'square',x:0.76,z,size:0.70,chairs:[{s:'E',c:C.green}]})),
+  // tables rondes
+  {type:'table',shape:'round',x:1.28,z:2.76,size:1.00,roundChairs:4,colors:[C.green],offset:45},
+  {type:'table',shape:'round',x:2.79,z:5.15,size:1.15,roundChairs:8,colors:[C.purple,C.green],offset:22.5},
+  {type:'table',shape:'round',x:2.88,z:8.91,size:1.15,roundChairs:8,colors:[C.green,C.purple],offset:22.5},
+  {type:'table',shape:'square',x:5.67,z:8.80,size:0.90,height:0.45}, // table basse lounge
+  // bar en L (marbre vert, h 1.10)
+  {type:'bar',x:4.70,z:4.70,w:0.45,d:4.10,color:C.greenMarble},
+  {type:'bar',x:5.30,z:6.52,w:1.15,d:0.45,color:C.greenMarble},
+  {type:'backbar',x:6.35,z:5.15,w:0.45,d:2.62,color:C.marble},
+  {type:'backbar',x:6.15,z:3.10,w:0.85,d:0.55,color:C.marble},
+  ...[3.56,4.07,4.58,5.10,5.61,6.06].map(z=>({type:'stool',x:4.30,z,color:C.purple})),
+  // dessertes / technique
+  {type:'box',name:'desserte passe',x:0.12,z:4.90,w:0.26,d:2.40,h:0.90,color:C.wood},
+  {type:'box',name:'desserte bas',x:4.95,z:9.55,w:1.0,d:0.30,h:0.90,color:C.wood},
+  {type:'box',name:'console',x:2.78,z:3.26,w:0.70,d:0.20,h:0.75,color:'#333'},
+  {type:'box',name:'TGBT 400x1200',x:6.01,z:0.20,w:1.20,d:0.40,h:2.0,color:C.marble},
+  {type:'box',name:'WC',x:-1.05,z:0.35,w:0.38,d:0.65,h:0.45,color:'#fff'},
+  {type:'box',name:'lavabo',x:-0.35,z:1.4,w:0.30,d:0.45,h:0.85,color:'#fff'},
+ ]};
+// =====================================================================================
+
+const scene=new THREE.Scene();scene.background=new THREE.Color('#f2efe9');
+const R=LAYOUT.room;
+const renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});renderer.setSize(innerWidth,innerHeight);renderer.setPixelRatio(devicePixelRatio);
+renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;document.body.appendChild(renderer.domElement);
+const cam=new THREE.PerspectiveCamera(45,innerWidth/innerHeight,0.05,200);
+const ctl=new OrbitControls(cam,renderer.domElement);ctl.enableDamping=true;
+const center=new THREE.Vector3(R.width/2,0,R.depth/2);
+function persp(){cam.position.set(-4,12,R.depth+6);ctl.target.copy(center);}
+function top(){cam.position.set(center.x,17,center.z+0.001);ctl.target.copy(center);}
+persp();
+scene.add(new THREE.HemisphereLight('#fff','#b8a990',0.9));
+const sun=new THREE.DirectionalLight('#fff4e0',1.6);sun.position.set(12,14,4);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);
+Object.assign(sun.shadow.camera,{left:-10,right:10,top:10,bottom:-10});sun.target.position.copy(center);scene.add(sun,sun.target);
+
+const M=c=>new THREE.MeshStandardMaterial({color:c,roughness:0.6});
+const groups={walls:new THREE.Group(),ceil:new THREE.Group()};scene.add(groups.walls,groups.ceil);
+function box(w,h,d,mat,x,y,z,parent=scene){const m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat.isMaterial?mat:M(mat));m.position.set(x,y,z);m.castShadow=m.receiveShadow=true;parent.add(m);return m;}
+function cyl(r,h,mat,x,y,z,parent=scene,seg=32){const m=new THREE.Mesh(new THREE.CylinderGeometry(r,r,h,seg),mat.isMaterial?mat:M(mat));m.position.set(x,y,z);m.castShadow=m.receiveShadow=true;parent.add(m);return m;}
+function tex(draw,s=256,rx=1,ry=1){const c=document.createElement('canvas');c.width=c.height=s;draw(c.getContext('2d'),s);const t=new THREE.CanvasTexture(c);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(rx,ry);t.colorSpace=THREE.SRGBColorSpace;return t;}
+const marbleTex=(base,vein)=>tex((g,s)=>{g.fillStyle=base;g.fillRect(0,0,s,s);g.strokeStyle=vein;for(let i=0;i<14;i++){g.lineWidth=Math.random()*2;g.beginPath();let x=Math.random()*s,y=0;g.moveTo(x,y);while(y<s){x+=(Math.random()-.5)*40;y+=20;g.lineTo(x,y);}g.stroke();}});
+const whiteMarble=new THREE.MeshStandardMaterial({map:marbleTex('#efebe4','#c9c2b6'),roughness:0.25});
+const greenMarble=new THREE.MeshStandardMaterial({map:marbleTex('#1f4a37','#cfd8d0'),roughness:0.2});
+
+// sols
+for(const f of LAYOUT.floors){let mat;
+ if(f.type==='tiles')mat=new THREE.MeshStandardMaterial({map:tex((g,s)=>{g.fillStyle=C.tile;g.fillRect(0,0,s,s);g.strokeStyle='#cdbfa8';g.strokeRect(0,0,s,s);g.fillStyle='#d9c7a8';g.beginPath();g.moveTo(0,s*.12);g.lineTo(s*.12,0);g.lineTo(0,0);g.fill();},256,f.w/0.6,f.d/0.6),roughness:0.5});
+ else if(f.type==='checker')mat=new THREE.MeshStandardMaterial({map:tex((g,s)=>{for(let i=0;i<2;i++)for(let j=0;j<2;j++){g.fillStyle=(i+j)%2?'#222':'#eee6d8';g.fillRect(i*s/2,j*s/2,s/2,s/2);}},64,f.w/0.4,f.d/0.4)});
+ else mat=M(f.color);
+ const m=new THREE.Mesh(new THREE.PlaneGeometry(f.w,f.d),mat);m.rotation.x=-Math.PI/2;m.position.set(f.x,f.type==='tiles'?0:0.002,f.z);m.receiveShadow=true;scene.add(m);}
+const friezeMat=w=>new THREE.MeshStandardMaterial({map:tex((g,s)=>{g.fillStyle='#f4efe6';g.fillRect(0,0,s,s);g.fillStyle=C.green;g.beginPath();g.moveTo(s/2,4);g.lineTo(s-4,s/2);g.lineTo(s/2,s-4);g.lineTo(4,s/2);g.fill();},64,w/0.18,1)});
+for(const f of LAYOUT.frieze){const L=Math.max(f.w,f.d);const m=new THREE.Mesh(new THREE.PlaneGeometry(L,0.18),friezeMat(L));m.rotation.x=-Math.PI/2;if(f.d>f.w)m.rotation.z=Math.PI/2;m.position.set(f.x,0.003,f.z);m.receiveShadow=true;scene.add(m);}
+
+// murs
+const wallMat=M(C.wall);
+for(const w of LAYOUT.walls){const t=w.t||R.wallT,dx=w.x2-w.x1,dz=w.z2-w.z1,L=Math.hypot(dx,dz);const m=box(dx?L+t:t,R.height,dz?L:t,wallMat,(w.x1+w.x2)/2,R.height/2,(w.z1+w.z2)/2,groups.walls);}
+const F=LAYOUT.facade,glass=new THREE.MeshStandardMaterial({color:'#9cc7d6',transparent:true,opacity:0.35,roughness:0.05});
+for(const p of F.parts){const L=p.z2-p.z1,zc=(p.z1+p.z2)/2;
+ if(p.type==='wall'){box(F.t,R.height,L,wallMat,F.x,R.height/2,zc,groups.walls);continue;}
+ const sill=p.sill||0;if(sill)box(F.t,sill,L,wallMat,F.x,sill/2,zc,groups.walls);
+ box(F.t,R.height-p.h,L,wallMat,F.x,(p.h+R.height)/2,zc,groups.walls);
+ box(0.03,p.h-sill,L,glass,F.x,(sill+p.h)/2,zc,groups.walls);box(0.06,p.h-sill,0.05,'#333',F.x,(sill+p.h)/2,p.z1+0.03,groups.walls);}
+const ceil=box(R.width+1.5,0.05,R.depth+0.2,'#f5f2ec',R.width/2-0.7,R.height+0.025,R.depth/2,groups.ceil);groups.ceil.visible=false;
+
+// mobilier
+const SEAT=0.45,TABLE=0.75,BAR=1.10,STOOL=0.75;
+function chair(x,z,rotY,color){const g=new THREE.Group();const mat=M(color);
+ cyl(0.22,0.08,mat,0,SEAT-0.04,0,g);const back=new THREE.Mesh(new THREE.CylinderGeometry(0.23,0.23,0.38,24,1,true,-Math.PI/2,Math.PI),mat);back.material.side=THREE.DoubleSide;back.position.set(0,SEAT+0.19,0);back.castShadow=true;g.add(back);
+ for(const[a,b]of[[.13,.13],[-.13,.13],[.13,-.13],[-.13,-.13]])cyl(0.015,SEAT-0.08,'#3a2a1a',a,(SEAT-0.08)/2,b,g,8);
+ g.position.set(x,0,z);g.rotation.y=rotY;scene.add(g);}
+const dirs={N:[0,-1,0],S:[0,1,Math.PI],W:[-1,0,-Math.PI/2],E:[1,0,Math.PI/2]};
+function banquette(it){const g=new THREE.Group();box(it.w,SEAT,it.d,it.color,0,SEAT/2,0,g);box(it.w,0.5,0.15,it.accent||it.color,0,SEAT+0.25,-it.d/2+0.075,g);
+ for(let i=0;i<(it.cushions||0);i++)box(0.4,0.3,0.12,C.mustard,-it.w/2+(i+0.5)*it.w/it.cushions,SEAT+0.15,-it.d/2+0.2,g);
+ g.position.set(it.x,0,it.z);g.rotation.y=-(it.rot||0)*Math.PI/180;scene.add(g);}
+for(const it of LAYOUT.items){switch(it.type){
+ case 'banquette':banquette(it);break;
+ case 'sofaU':{const{w,d}=it,t=0.55;banquette({x:it.x,z:it.z-d/2+t/2,w,d:t,color:it.color,cushions:2});banquette({x:it.x+w/2-t/2,z:it.z+t/2,w:d-t,d:t,rot:90,color:it.side,cushions:1});banquette({x:it.x,z:it.z+d/2-t/2,w:w-t,d:t,rot:180,color:it.color,cushions:2});break;}
+ case 'table':{const h=it.height||TABLE;
+  if(it.shape==='round'){cyl(it.size/2,0.04,whiteMarble,it.x,h-0.02,it.z,scene,48);cyl(0.05,h-0.04,'#222',it.x,(h-0.04)/2,it.z);cyl(0.25,0.02,'#222',it.x,0.01,it.z);
+   const n=it.roundChairs,r=it.size/2+0.2;for(let i=0;i<n;i++){const a=(i*360/n+(it.offset||0))*Math.PI/180;chair(it.x+Math.cos(a)*r,it.z+Math.sin(a)*r,-a-Math.PI/2,it.colors[i%it.colors.length]);}}
+  else{box(it.size,0.04,it.size,whiteMarble,it.x,h-0.02,it.z);cyl(0.04,h-0.04,'#222',it.x,(h-0.04)/2,it.z,scene,12);
+   for(const ch of it.chairs||[]){const[dx,dz,r]=dirs[ch.s],o=it.size/2+0.15;chair(it.x+dx*o,it.z+dz*o,r,ch.c);}}break;}
+ case 'bar':box(it.w,BAR,it.d,greenMarble,it.x,BAR/2,it.z);break;
+ case 'backbar':box(it.w,0.9,it.d,whiteMarble,it.x,0.45,it.z);break;
+ case 'stool':cyl(0.2,0.08,it.color,it.x,STOOL-0.04,it.z);cyl(0.03,STOOL-0.08,'#b08d57',it.x,(STOOL-0.08)/2,it.z,scene,8);cyl(0.18,0.02,'#b08d57',it.x,0.01,it.z);break;
+ case 'box':box(it.w,it.h,it.d,it.color,it.x,it.h/2,it.z);break;}}
+
+// grille 1 m
+const grid=new THREE.GridHelper(14,14,'#c00','#999');grid.position.set(3,0.01,5);grid.visible=false;scene.add(grid);
+const $=id=>document.getElementById(id);
+$('top').onclick=top;$('persp').onclick=persp;$('walls').onclick=()=>groups.walls.visible^=1;$('ceil').onclick=()=>groups.ceil.visible^=1;$('grid').onclick=()=>grid.visible^=1;
+addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+window.LAYOUT=LAYOUT;window.__ready=true;
+(function loop(){requestAnimationFrame(loop);ctl.update();renderer.render(scene,cam);})();
+</script></body></html>
